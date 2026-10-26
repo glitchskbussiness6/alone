@@ -2,7 +2,8 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+# ping_timeout और ping_interval को ऑप्टिमाइज़ किया गया है ताकि कनेक्शन ड्रॉप न हो और परफॉरमेंस तेज़ रहे
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=15, ping_interval=5)
 
 HTML_PAGE = '''
 <!DOCTYPE html>
@@ -23,8 +24,12 @@ HTML_PAGE = '''
         window.onload = function() {
             canvas = document.getElementById("video-canvas");
             ctx = canvas.getContext("2d");
+            // डिफ़ॉल्ट रूप से Canvas का रिज़ॉल्यूशन सेट कर दें
+            canvas.width = 1280;
+            canvas.height = 720;
         };
 
+        // 1. Receive & Draw Frame Instantly
         socket.on('video_frame', function(data) {
             if (!data.image) return;
             const blob = new Blob([data.image], { type: "image/jpeg" });
@@ -37,6 +42,19 @@ HTML_PAGE = '''
             }).catch(e => console.log(e));
         });
 
+        // 2. Black Screen on Pause Feature
+        socket.on('stream_paused', function() {
+            if(ctx && canvas) {
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.fillStyle = "white";
+                ctx.font = "40px Arial";
+                ctx.textAlign = "center";
+                ctx.fillText("Stream Paused", canvas.width/2, canvas.height/2);
+            }
+        });
+
+        // 3. Controls (Mouse & Keyboard)
         function sendClick(event) {
             const rect = canvas.getBoundingClientRect();
             const x = (event.clientX - rect.left) / rect.width;
@@ -85,8 +103,12 @@ def index():
 @socketio.on('video_frame')
 def handle_video_frame(data):
     emit('video_frame', data, broadcast=True, include_self=False)
-    # यह रिटर्न स्टेटमेंट सेंडर को बताएगा कि फ्रेम डिलीवर हो गया है
-    return True 
+    return True # ACK to Host
+
+# नया इवेंट: जब होस्ट पीसी पॉज़ करेगा, तो यह कॉल होगा
+@socketio.on('stream_paused')
+def handle_stream_pause():
+    emit('stream_paused', broadcast=True, include_self=False)
 
 @socketio.on('mouse_click')
 def handle_click(data):
