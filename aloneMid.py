@@ -1,113 +1,105 @@
-import time
-import cv2
-import numpy as np
-import threading
-import pyautogui
-from pynput import keyboard
-import mss
-import socketio
+from flask import Flask, render_template_string
+from flask_socketio import SocketIO, emit
 
-pyautogui.FAILSAFE = False
+app = Flask(__name__)
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
-sio = socketio.Client()
-RELAY_SERVER_URL = 'https://alone-nni7.onrender.com' 
-is_streaming = False
+HTML_PAGE = '''
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Relay Remote Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0"/>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body, html { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background-color: #000; }
+        #video-canvas { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
+        #control-container { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 5; }
+    </style>
+    <script>
+        const socket = io();
+        let canvas, ctx;
 
-ready_to_send = True
+        window.onload = function() {
+            canvas = document.getElementById("video-canvas");
+            ctx = canvas.getContext("2d");
+        };
 
-def on_frame_ack(*args):
-    """सर्वर से सिग्नल मिलते ही पाइप को फिर से ओपन कर दो"""
-    global ready_to_send
-    ready_to_send = True
+        socket.on('video_frame', function(data) {
+            if (!data.image) return;
+            const blob = new Blob([data.image], { type: "image/jpeg" });
+            createImageBitmap(blob).then(function(imgBitmap) {
+                if(canvas.width !== imgBitmap.width) {
+                    canvas.width = imgBitmap.width;
+                    canvas.height = imgBitmap.height;
+                }
+                ctx.drawImage(imgBitmap, 0, 0);
+            }).catch(e => console.log(e));
+        });
 
-def capture_screen():
-    global is_streaming, ready_to_send
-    
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        while True:
-            if not sio.connected or not is_streaming:
-                time.sleep(0.1)
-                continue
+        function sendClick(event) {
+            const rect = canvas.getBoundingClientRect();
+            const x = (event.clientX - rect.left) / rect.width;
+            const y = (event.clientY - rect.top) / rect.height;
+            socket.emit('mouse_click', { x: x, y: y });
+        }
 
-            try:
-                # 🚀 THE MAGIC TRICK: "FIRE AND FORGET"
-                # अगर पुराना फ्रेम अभी तक रास्ते में है, तो इस नए फ्रेम को स्टोर मत करो, सीधा DROP (नष्ट) कर दो!
-                if not ready_to_send:
-                    time.sleep(0.005) # बस हल्का सा स्लीप ताकि CPU क्रैश न हो
-                    continue # फ्रेम ड्रॉप हो गया! कोई लैग नहीं जुड़ेगा।
+        window.addEventListener('wheel', function(event) {
+            event.preventDefault();
+            const direction = event.deltaY > 0 ? 'down' : 'up';
+            socket.emit('mouse_scroll', { direction: direction });
+        }, { passive: false });
 
-                # जब नेटवर्क एकदम खाली हो, तभी ताज़ा फ्रेम कैप्चर करो
-                sct_img = sct.grab(monitor)
-                frame = np.array(sct_img)
-                
-                # हल्का रिज़ॉल्यूशन और मीडियम क्वालिटी (ताकि झटके से ट्रांसफर हो)
-                frame = cv2.resize(frame, (1024, 576))
-                frame_bgr = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                _, buffer = cv2.imencode('.jpg', frame_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 45])
-                
-                # पाइप को लॉक करो और डेटा फायर करो
-                ready_to_send = False
-                sio.emit('video_frame', {'image': buffer.tobytes()}, callback=on_frame_ack)
-                
-            except Exception as e:
-                print(f"[!] Streaming Error: {e}")
-                ready_to_send = True 
-                time.sleep(1)
+        function sendText(text) {
+            socket.emit('keyboard_input', { text: text });
+        }
 
-@sio.on('execute_click')
-def on_click(data):
-    if not is_streaming: return
-    x, y = data['x'], data['y']
-    screen_width, screen_height = pyautogui.size()
-    pyautogui.click(int(x * screen_width), int(y * screen_height))
+        window.addEventListener('keydown', function(event) {
+            const specialKeys = ['Backspace', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape', 'Tab'];
+            if (event.key === 'Backspace') event.preventDefault();
+            if (event.key.length === 1 || specialKeys.includes(event.key)) {
+                sendText(event.key);
+            }
+        });
 
-@sio.on('execute_scroll')
-def on_scroll(data):
-    if not is_streaming: return
-    direction = data['direction']
-    pyautogui.scroll(-100 if direction == "down" else 100)
+        function showScreen() {
+            document.getElementById('video-canvas').style.display = "block";
+            document.getElementById('control-container').style.display = "none";
+        }
+    </script>
+</head>
+<body>
+    <div id="control-container">
+        <h2 style="color:white;">Connected to Relay Server</h2>
+        <button onclick="showScreen()" style="width: 150px; height: 70px; border-radius: 35px; background-color: dodgerblue; color: white; font-size: 18px; border: none; cursor: pointer;">Show Screen</button>
+    </div>
+    <canvas id="video-canvas" onclick="sendClick(event)"></canvas>
+</body>
+</html>
+'''
 
-@sio.on('execute_keyboard')
-def on_keyboard(data):
-    if not is_streaming: return
-    key = data.get('text', '')
-    if not key: return
+@app.route('/bill')
+def index():
+    return render_template_string(HTML_PAGE)
 
-    special_keys = {
-        'Enter': 'enter', 'Backspace': 'backspace', 'Tab': 'tab',
-        'Escape': 'esc', 'ArrowUp': 'up', 'ArrowDown': 'down',
-        'ArrowLeft': 'left', 'ArrowRight': 'right', ' ': 'space'
-    }
-    
-    try:
-        if key in special_keys:
-            pyautogui.press(special_keys[key])
-        elif len(key) == 1:
-            pyautogui.write(key)
-        else:
-            pyautogui.press(key.lower())
-    except:
-        pass
+@socketio.on('video_frame')
+def handle_video_frame(data):
+    emit('video_frame', data, broadcast=True, include_self=False)
+    # यह रिटर्न स्टेटमेंट सेंडर को बताएगा कि फ्रेम डिलीवर हो गया है
+    return True 
 
-def on_press(key):
-    global is_streaming
-    if key == keyboard.Key.media_volume_down:
-        is_streaming = True
-        print(" -> Stream Started (Fire & Forget Mode)")
-    elif key == keyboard.Key.media_volume_up:
-        is_streaming = False
-        print(" -> Stream Paused")
+@socketio.on('mouse_click')
+def handle_click(data):
+    emit('execute_click', data, broadcast=True, include_self=False)
+
+@socketio.on('mouse_scroll')
+def handle_scroll(data):
+    emit('execute_scroll', data, broadcast=True, include_self=False)
+
+@socketio.on('keyboard_input')
+def handle_keyboard(data):
+    emit('execute_keyboard', data, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
-    print(f"Connecting to Relay Server at {RELAY_SERVER_URL} ...")
-    try:
-        sio.connect(RELAY_SERVER_URL)
-        print("Successfully connected!")
-    except Exception as e:
-        print(f"Connection failed: {e}")
-    
-    threading.Thread(target=capture_screen, daemon=True).start()
-
-    with keyboard.Listener(on_press=on_press) as listener:
-        listener.join()
+    print("Relay Server is running...")
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
