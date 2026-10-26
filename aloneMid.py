@@ -2,7 +2,6 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-# Binary सपोर्ट के लिए CORS setup
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 HTML_PAGE = '''
@@ -14,29 +13,36 @@ HTML_PAGE = '''
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background-color: #000; }
-        #video-feed { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
+        /* Canvas इस्तेमाल कर रहे हैं GPU Acceleration के लिए */
+        #video-canvas { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
         #control-container { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 5; }
     </style>
     <script>
         const socket = io();
+        let canvas, ctx;
 
-        // 1. Receive Binary Video Frame (No Base64 delay)
+        window.onload = function() {
+            canvas = document.getElementById("video-canvas");
+            ctx = canvas.getContext("2d");
+        };
+
+        // 1. Receive & Draw Frame Instantly using Canvas (Hardware Accelerated)
         socket.on('video_frame', function(data) {
             if (!data.image) return;
             const blob = new Blob([data.image], { type: "image/jpeg" });
-            const urlCreator = window.URL || window.webkitURL;
-            const imageUrl = urlCreator.createObjectURL(blob);
-            
-            const img = document.getElementById("video-feed");
-            // Memory leak से बचने के लिए पुराना URL डिलीट करें
-            img.onload = function() { urlCreator.revokeObjectURL(imageUrl); };
-            img.src = imageUrl;
+            createImageBitmap(blob).then(function(imgBitmap) {
+                // Set native resolution for sharpness
+                if(canvas.width !== imgBitmap.width) {
+                    canvas.width = imgBitmap.width;
+                    canvas.height = imgBitmap.height;
+                }
+                ctx.drawImage(imgBitmap, 0, 0);
+            }).catch(e => console.log(e));
         });
 
-        // 2. Mouse Click
+        // 2. Mouse Click on Canvas
         function sendClick(event) {
-            const img = document.getElementById("video-feed");
-            const rect = img.getBoundingClientRect();
+            const rect = canvas.getBoundingClientRect();
             const x = (event.clientX - rect.left) / rect.width;
             const y = (event.clientY - rect.top) / rect.height;
             socket.emit('mouse_click', { x: x, y: y });
@@ -57,14 +63,13 @@ HTML_PAGE = '''
         window.addEventListener('keydown', function(event) {
             const specialKeys = ['Backspace', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape', 'Tab'];
             if (event.key === 'Backspace') event.preventDefault();
-            
             if (event.key.length === 1 || specialKeys.includes(event.key)) {
                 sendText(event.key);
             }
         });
 
         function showScreen() {
-            document.getElementById('video-feed').style.display = "block";
+            document.getElementById('video-canvas').style.display = "block";
             document.getElementById('control-container').style.display = "none";
         }
     </script>
@@ -74,7 +79,8 @@ HTML_PAGE = '''
         <h2 style="color:white;">Connected to Relay Server</h2>
         <button onclick="showScreen()" style="width: 150px; height: 70px; border-radius: 35px; background-color: dodgerblue; color: white; font-size: 18px; border: none; cursor: pointer;">Show Screen</button>
     </div>
-    <img id="video-feed" onclick="sendClick(event)">
+    <!-- <img> की जगह <canvas> का उपयोग -->
+    <canvas id="video-canvas" onclick="sendClick(event)"></canvas>
 </body>
 </html>
 '''
@@ -85,7 +91,6 @@ def index():
 
 @socketio.on('video_frame')
 def handle_video_frame(data):
-    # Binary डेटा पास कर रहे हैं
     emit('video_frame', data, broadcast=True, include_self=False)
 
 @socketio.on('mouse_click')
