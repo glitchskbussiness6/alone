@@ -119,4 +119,5 @@ def handle_keyboard(data):
 
 if __name__ == '__main__':
     print("Relay Server is running on http://0.0.0.0:5000/bill")
-    socketio.run(app, host='0.0.0.0', port=5000, debug=False)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
+
