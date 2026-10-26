@@ -15,8 +15,6 @@ HTML_PAGE = '''
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background-color: #000; }
         #video-feed { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: fill; cursor: pointer; z-index: 1; }
-        #keyboard-input { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 60vw; padding: 10px; z-index: 10; display: none; border: 2px solid dodgerblue; border-radius: 8px; opacity: 0.7; }
-        #keyboard-input:focus { opacity: 1; }
         #control-container { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 5; }
     </style>
     <script>
@@ -50,23 +48,12 @@ HTML_PAGE = '''
             socket.emit('keyboard_input', { text: text });
         }
 
-        function handleInput(event) {
-            const inputField = event.target;
-            const val = inputField.value;
-            if (val.length > 0) {
-                sendText(val.slice(-1));
-                inputField.value = ""; 
-            }
-        }
-
         window.addEventListener('keydown', function(event) {
             const specialKeys = ['Backspace', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape', 'Tab'];
+            
+            // Backspace से ब्राउज़र को पीछे जाने से रोकना
             if (event.key === 'Backspace') event.preventDefault();
             
-            if (document.activeElement.id === 'keyboard-input') {
-                if (specialKeys.includes(event.key)) sendText(event.key);
-                return;
-            }
             if (event.key.length === 1 || specialKeys.includes(event.key)) {
                 sendText(event.key);
             }
@@ -74,9 +61,7 @@ HTML_PAGE = '''
 
         function showScreen() {
             document.getElementById('video-feed').style.display = "block";
-            document.getElementById('keyboard-input').style.display = "block";
             document.getElementById('control-container').style.display = "none";
-            document.getElementById('keyboard-input').focus();
         }
     </script>
 </head>
@@ -85,7 +70,6 @@ HTML_PAGE = '''
         <h2 style="color:white;">Connected to Relay Server</h2>
         <button onclick="showScreen()" style="width: 150px; height: 70px; border-radius: 35px; background-color: dodgerblue; color: white; font-size: 18px; border: none; cursor: pointer;">Show Screen</button>
     </div>
-    <input type="text" id="keyboard-input" placeholder="Tap here to type..." oninput="handleInput(event)">
     <img id="video-feed" onclick="sendClick(event)">
 </body>
 </html>
@@ -95,29 +79,24 @@ HTML_PAGE = '''
 def index():
     return render_template_string(HTML_PAGE)
 
-# --- RELAY LOGIC (यहाँ सर्वर सिर्फ एक से लेकर दूसरे को डेटा पास कर रहा है) ---
+# --- RELAY LOGIC ---
 
 @socketio.on('video_frame')
 def handle_video_frame(data):
-    # Original PC से वीडियो आया -> Another PC (Browser) को पास कर दो
     emit('video_frame', data, broadcast=True, include_self=False)
 
 @socketio.on('mouse_click')
 def handle_click(data):
-    # Another PC से क्लिक आया -> Original PC को पास कर दो
     emit('execute_click', data, broadcast=True, include_self=False)
 
 @socketio.on('mouse_scroll')
 def handle_scroll(data):
-    # Another PC से स्क्रॉल आया -> Original PC को पास कर दो
     emit('execute_scroll', data, broadcast=True, include_self=False)
 
 @socketio.on('keyboard_input')
 def handle_keyboard(data):
-    # Another PC से कीबोर्ड इनपुट आया -> Original PC को पास कर दो
     emit('execute_keyboard', data, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
     print("Relay Server is running on http://0.0.0.0:5000/bill")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
-
