@@ -41,8 +41,18 @@ HTML_PAGE = '''
         const video = document.getElementById('video-stream');
         const cursor = document.getElementById('remote-cursor');
         
-        let pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google's Free STUN
+       let pc = new RTCPeerConnection({
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' },
+                { 
+                    urls: [
+                        'turn:openrelay.metered.ca:80',
+                        'turn:openrelay.metered.ca:443'
+                    ], 
+                    username: 'openrelayproject', 
+                    credential: 'openrelayproject' 
+                }
+            ]
         });
 
         // --- 1. WebRTC Signaling ---
