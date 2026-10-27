@@ -48,6 +48,15 @@ HTML_PAGE = '''
         // --- 1. WebRTC Signaling ---
         pc.ontrack = (event) => { 
             video.srcObject = event.streams[0]; 
+            
+            // मोबाइल ब्राउज़र्स में ज़बरदस्ती प्ले करने के लिए
+            video.onloadedmetadata = () => {
+                video.play().catch((err) => {
+                    console.log("Autoplay blocked by mobile browser:", err);
+                    // अगर फोन प्ले करने से रोके, तो एक क्लिक पर प्ले करें
+                    document.body.onclick = () => { video.play(); };
+                });
+            };
         };
         
         pc.onicecandidate = (event) => {
