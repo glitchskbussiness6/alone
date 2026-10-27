@@ -3,98 +3,110 @@ from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 
-# Increased timeouts to prevent Render/Network drops during heavy frame streaming
+# High-performance async socket config with binary payload optimization
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode='threading',
-    ping_timeout=60,
-    ping_interval=25
+    ping_timeout=30,
+    ping_interval=10,
+    max_http_buffer_size=10 * 1024 * 1024  # 10MB limit for high fps burst
 )
 
 HTML_PAGE = '''
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Relay Remote Control</title>
+    <title>Stream API Remote Controller</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0"/>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background-color: #000; }
-        #video-canvas { display: block; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
+        #video-canvas { display: block; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; }
     </style>
     <script>
-        const socket = io();
+        const socket = io({ transports: ['websocket', 'polling'] });
         let canvas, ctx;
+        let isProcessingFrame = false;
 
         window.onload = function() {
             canvas = document.getElementById("video-canvas");
-            ctx = canvas.getContext("2d");
+            ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
             canvas.width = 1280;
             canvas.height = 720;
         };
 
-        // 1. Receive & Draw Frame Instantly
+        // Hardware accelerated ImageBitmap Rendering pipeline
         socket.on('video_frame', function(data) {
-            if (!data.image) return;
+            if (isProcessingFrame) return; // Drop frame on Client side if rendering lag occurs
+            isProcessingFrame = true;
+
             const blob = new Blob([data.image], { type: "image/jpeg" });
-            createImageBitmap(blob).then(function(imgBitmap) {
+            createImageBitmap(blob, { imageOrientation: "none", resizeQuality: "low" }).then(function(imgBitmap) {
                 if(canvas.width !== imgBitmap.width || canvas.height !== imgBitmap.height) {
                     canvas.width = imgBitmap.width;
                     canvas.height = imgBitmap.height;
                 }
                 ctx.drawImage(imgBitmap, 0, 0);
-            }).catch(e => console.log(e));
+                imgBitmap.close(); // Free GPU Memory immediately
+                isProcessingFrame = false;
+            }).catch(() => { isProcessingFrame = false; });
         });
 
-        // 2. Black Screen on Pause Feature
         socket.on('stream_paused', function() {
             if(ctx && canvas) {
-                ctx.fillStyle = "black";
+                ctx.fillStyle = "#0a0a0a";
                 ctx.fillRect(0, 0, canvas.width, canvas.height);
-                ctx.fillStyle = "white";
-                ctx.font = "40px Arial";
+                ctx.fillStyle = "#00ffcc";
+                ctx.font = "bold 32px Segoe UI, Arial";
                 ctx.textAlign = "center";
-                ctx.fillText("Stream Paused", canvas.width/2, canvas.height/2);
+                ctx.fillText("STREAM PAUSED (IDLE)", canvas.width/2, canvas.height/2);
             }
         });
 
-        // 3. Mouse Click Input
+        // 1. Precise Mouse Click Event
         function sendClick(event) {
             const rect = canvas.getBoundingClientRect();
             const x = (event.clientX - rect.left) / rect.width;
             const y = (event.clientY - rect.top) / rect.height;
-            socket.emit('mouse_click', { x: x, y: y });
+            socket.emit('mouse_click', { x: x, y: y, button: event.button });
         }
 
-        // 4. Mouse Scroll Input
+        // 2. Optimized Wheel Scroll (Accurate Smooth Delta Mapping)
+        let scrollTimeout;
         window.addEventListener('wheel', function(event) {
             event.preventDefault();
-            const direction = event.deltaY > 0 ? 'down' : 'up';
-            socket.emit('mouse_scroll', { direction: direction });
+            
+            // Throttle scroll events to 30ms to prevent network flooding
+            if (!scrollTimeout) {
+                scrollTimeout = setTimeout(() => {
+                    scrollTimeout = null;
+                }, 30);
+                
+                const deltaY = event.deltaY;
+                const direction = deltaY > 0 ? 'down' : 'up';
+                const amount = Math.abs(deltaY);
+                socket.emit('mouse_scroll', { direction: direction, amount: amount });
+            }
         }, { passive: false });
 
-        // 5. Keyboard Input
-        function sendText(text) {
-            socket.emit('keyboard_input', { text: text });
-        }
-
+        // 3. Low Latency Keyboard Mapping
         window.addEventListener('keydown', function(event) {
-            const specialKeys = ['Backspace', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape', 'Tab'];
-            if (event.key === 'Backspace') event.preventDefault();
+            const specialKeys = ['Backspace', 'Enter', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Escape', 'Tab', 'Delete'];
+            if (['Backspace', 'Tab'].includes(event.key)) event.preventDefault();
+            
             if (event.key.length === 1 || specialKeys.includes(event.key)) {
-                sendText(event.key);
+                socket.emit('keyboard_input', { text: event.key });
             }
         });
     </script>
 </head>
 <body>
-    <canvas id="video-canvas" onclick="sendClick(event)"></canvas>
+    <canvas id="video-canvas" onclick="sendClick(event)" oncontextmenu="event.preventDefault(); sendClick(event);"></canvas>
 </body>
 </html>
 '''
 
-# FIX: Main Route changed to '/'
 @app.route('/')
 def index():
     return render_template_string(HTML_PAGE)
@@ -102,7 +114,7 @@ def index():
 @socketio.on('video_frame')
 def handle_video_frame(data):
     emit('video_frame', data, broadcast=True, include_self=False)
-    return True # ACK trigger back to Client
+    return True 
 
 @socketio.on('stream_paused')
 def handle_stream_pause():
@@ -121,5 +133,5 @@ def handle_keyboard(data):
     emit('execute_keyboard', data, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
-    print("Relay Server running...")
+    print("Relay High-Perf Engine running on port 5000...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
