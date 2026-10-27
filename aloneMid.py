@@ -33,7 +33,8 @@ HTML_PAGE = '''
     </svg>
     
     <!-- Video element (muted added) -->
-    <video id="video-stream" autoplay playsinline muted></video>
+    <!-- iOS support के लिए webkit-playsinline ऐड किया गया है -->
+    <video id="video-stream" autoplay playsinline webkit-playsinline muted></video>
 
     <script>
         const socket = io();
