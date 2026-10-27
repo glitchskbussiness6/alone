@@ -2,7 +2,6 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-# async_mode='eventlet' या 'threading' आप अपनी सर्वर कॉन्फ़िगरेशन के हिसाब से लगा सकते हैं
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 HTML_PAGE = '''
@@ -13,6 +12,8 @@ HTML_PAGE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0"/>
     <style>
         body { margin: 0; background: black; overflow: hidden; }
+        
+        /* Browser autoplay policy bypass ke liye muted lagana zaruri hai */
         video { width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; }
         
         /* Virtual Mouse Cursor */
@@ -31,7 +32,8 @@ HTML_PAGE = '''
         <path d="M7 2l12 11.2-5.8.5 3.3 7.3-2.2.9-3.2-7.4-4.4 4.7z"/>
     </svg>
     
-    <video id="video-stream" autoplay playsinline></video>
+    <!-- Video element (muted added) -->
+    <video id="video-stream" autoplay playsinline muted></video>
 
     <script>
         const socket = io();
@@ -78,7 +80,6 @@ HTML_PAGE = '''
         // --- 2. Metadata Mouse Trick ---
         socket.on('mouse_move', (data) => {
             const rect = video.getBoundingClientRect();
-            // Video aspect ratio vs Window aspect ratio logic
             const videoRatio = 1280 / 720;
             const windowRatio = rect.width / rect.height;
             
@@ -102,7 +103,7 @@ HTML_PAGE = '''
         });
 
         // --- 3. Click Sender ---
-        video.oncontextmenu = (e) => e.preventDefault(); // Prevent right-click menu
+        video.oncontextmenu = (e) => e.preventDefault(); 
         
         video.onmousedown = (e) => {
             const rect = video.getBoundingClientRect();
