@@ -3,10 +3,11 @@ from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 
+# async_mode='threading' सेट करें
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
-    async_mode='eventlet',
+    async_mode='threading',
     ping_timeout=30,
     ping_interval=10,
     max_http_buffer_size=10 * 1024 * 1024
