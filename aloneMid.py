@@ -2,8 +2,15 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-# ping_timeout और ping_interval
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=15, ping_interval=5)
+
+# Increased timeouts to prevent Render/Network drops during heavy frame streaming
+socketio = SocketIO(
+    app,
+    cors_allowed_origins="*",
+    async_mode='threading',
+    ping_timeout=60,
+    ping_interval=25
+)
 
 HTML_PAGE = '''
 <!DOCTYPE html>
@@ -14,8 +21,7 @@ HTML_PAGE = '''
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         body, html { margin: 0; padding: 0; overflow: hidden; height: 100%; width: 100%; background-color: #000; }
-        #video-canvas { display: none; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
-        #control-container { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); text-align: center; z-index: 5; }
+        #video-canvas { display: block; position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; z-index: 1; }
     </style>
     <script>
         const socket = io();
@@ -24,7 +30,6 @@ HTML_PAGE = '''
         window.onload = function() {
             canvas = document.getElementById("video-canvas");
             ctx = canvas.getContext("2d");
-            // डिफ़ॉल्ट रूप से Canvas का रिज़ॉल्यूशन सेट कर दें
             canvas.width = 1280;
             canvas.height = 720;
         };
@@ -34,7 +39,7 @@ HTML_PAGE = '''
             if (!data.image) return;
             const blob = new Blob([data.image], { type: "image/jpeg" });
             createImageBitmap(blob).then(function(imgBitmap) {
-                if(canvas.width !== imgBitmap.width) {
+                if(canvas.width !== imgBitmap.width || canvas.height !== imgBitmap.height) {
                     canvas.width = imgBitmap.width;
                     canvas.height = imgBitmap.height;
                 }
@@ -54,7 +59,7 @@ HTML_PAGE = '''
             }
         });
 
-        // 3. Controls (Mouse & Keyboard)
+        // 3. Mouse Click Input
         function sendClick(event) {
             const rect = canvas.getBoundingClientRect();
             const x = (event.clientX - rect.left) / rect.width;
@@ -62,12 +67,14 @@ HTML_PAGE = '''
             socket.emit('mouse_click', { x: x, y: y });
         }
 
+        // 4. Mouse Scroll Input
         window.addEventListener('wheel', function(event) {
             event.preventDefault();
             const direction = event.deltaY > 0 ? 'down' : 'up';
             socket.emit('mouse_scroll', { direction: direction });
         }, { passive: false });
 
+        // 5. Keyboard Input
         function sendText(text) {
             socket.emit('keyboard_input', { text: text });
         }
@@ -79,33 +86,24 @@ HTML_PAGE = '''
                 sendText(event.key);
             }
         });
-
-        function showScreen() {
-            document.getElementById('video-canvas').style.display = "block";
-            document.getElementById('control-container').style.display = "none";
-        }
     </script>
 </head>
 <body>
-    <div id="control-container">
-        <h2 style="color:white;">Connected to Relay Server</h2>
-        <button onclick="showScreen()" style="width: 150px; height: 70px; border-radius: 35px; background-color: dodgerblue; color: white; font-size: 18px; border: none; cursor: pointer;">Show Screen</button>
-    </div>
     <canvas id="video-canvas" onclick="sendClick(event)"></canvas>
 </body>
 </html>
 '''
 
-@app.route('/bill')
+# FIX: Main Route changed to '/'
+@app.route('/')
 def index():
     return render_template_string(HTML_PAGE)
 
 @socketio.on('video_frame')
 def handle_video_frame(data):
     emit('video_frame', data, broadcast=True, include_self=False)
-    return True # ACK to Host
+    return True # ACK trigger back to Client
 
-# नया इवेंट: जब होस्ट पीसी पॉज़ करेगा, तो यह कॉल होगा
 @socketio.on('stream_paused')
 def handle_stream_pause():
     emit('stream_paused', broadcast=True, include_self=False)
@@ -123,5 +121,5 @@ def handle_keyboard(data):
     emit('execute_keyboard', data, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
-    print("Relay Server is running...")
+    print("Relay Server running...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
