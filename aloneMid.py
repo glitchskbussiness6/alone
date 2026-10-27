@@ -2,6 +2,7 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
+# async_mode='eventlet' या 'threading' आप अपनी सर्वर कॉन्फ़िगरेशन के हिसाब से लगा सकते हैं
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 HTML_PAGE = '''
@@ -9,19 +10,27 @@ HTML_PAGE = '''
 <html>
 <head>
     <title>WebRTC Remote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0"/>
     <style>
         body { margin: 0; background: black; overflow: hidden; }
-        video { width: 100vw; height: 100vh; object-fit: contain; }
+        video { width: 100vw; height: 100vh; object-fit: contain; cursor: crosshair; }
+        
+        /* Virtual Mouse Cursor */
         #remote-cursor {
-            position: absolute; width: 20px; height: 20px; z-index: 100;
+            position: absolute; width: 22px; height: 22px; z-index: 100;
             pointer-events: none; fill: white; stroke: black; stroke-width: 1px;
-            transition: transform 0.05s linear;
+            transition: transform 0.05s linear; display: none;
+            transform-origin: top left;
         }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
-    <svg id="remote-cursor" viewBox="0 0 24 24"><path d="M7 2l12 11.2-5.8.5 3.3 7.3-2.2.9-3.2-7.4-4.4 4.7z"/></svg>
+    <!-- Fake Mouse Pointer -->
+    <svg id="remote-cursor" viewBox="0 0 24 24">
+        <path d="M7 2l12 11.2-5.8.5 3.3 7.3-2.2.9-3.2-7.4-4.4 4.7z"/>
+    </svg>
+    
     <video id="video-stream" autoplay playsinline></video>
 
     <script>
@@ -30,41 +39,97 @@ HTML_PAGE = '''
         const cursor = document.getElementById('remote-cursor');
         
         let pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google's free STUN
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] // Google's Free STUN
         });
 
-        // 1. WebRTC Signaling
-        pc.ontrack = (event) => { video.srcObject = event.streams[0]; };
+        // --- 1. WebRTC Signaling ---
+        pc.ontrack = (event) => { 
+            video.srcObject = event.streams[0]; 
+        };
+        
         pc.onicecandidate = (event) => {
-            if (event.candidate) socket.emit('ice_candidate', event.candidate);
+            if (event.candidate) {
+                socket.emit('ice_candidate', {
+                    candidate: event.candidate.candidate,
+                    sdpMid: event.candidate.sdpMid,
+                    sdpMLineIndex: event.candidate.sdpMLineIndex
+                });
+            }
         };
 
         socket.on('offer', async (offer) => {
             await pc.setRemoteDescription(new RTCSessionDescription(offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            socket.emit('answer', answer);
+            socket.emit('answer', { type: answer.type, sdp: answer.sdp });
         });
 
-        socket.on('ice_candidate', async (candidate) => {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        socket.on('ice_candidate', async (data) => {
+            try {
+                await pc.addIceCandidate(new RTCIceCandidate(data));
+            } catch (e) {
+                console.error("Error adding ice candidate", e);
+            }
         });
 
-        socket.emit('viewer_joined'); // Tell Python we are ready
+        // Tell Python we are ready to view
+        socket.emit('viewer_joined');
 
-        // 2. Mouse Metadata
+        // --- 2. Metadata Mouse Trick ---
         socket.on('mouse_move', (data) => {
             const rect = video.getBoundingClientRect();
-            // Basic coordinate mapping (you can add the aspect ratio math here)
-            const finalX = rect.left + (data.x * rect.width);
-            const finalY = rect.top + (data.y * rect.height);
+            // Video aspect ratio vs Window aspect ratio logic
+            const videoRatio = 1280 / 720;
+            const windowRatio = rect.width / rect.height;
+            
+            let drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+            
+            if (windowRatio > videoRatio) {
+                drawHeight = rect.height;
+                drawWidth = rect.height * videoRatio;
+                offsetX = (rect.width - drawWidth) / 2;
+            } else {
+                drawWidth = rect.width;
+                drawHeight = rect.width / videoRatio;
+                offsetY = (rect.height - drawHeight) / 2;
+            }
+
+            const finalX = rect.left + offsetX + (data.x * drawWidth);
+            const finalY = rect.top + offsetY + (data.y * drawHeight);
+            
+            cursor.style.display = 'block';
             cursor.style.transform = `translate(${finalX}px, ${finalY}px)`;
         });
 
-        // 3. Send Clicks back to Python
-        video.onclick = (e) => {
+        // --- 3. Click Sender ---
+        video.oncontextmenu = (e) => e.preventDefault(); // Prevent right-click menu
+        
+        video.onmousedown = (e) => {
             const rect = video.getBoundingClientRect();
-            socket.emit('mouse_click', { x: (e.clientX - rect.left)/rect.width, y: (e.clientY - rect.top)/rect.height });
+            const videoRatio = 1280 / 720;
+            const windowRatio = rect.width / rect.height;
+            
+            let drawWidth, drawHeight, offsetX = 0, offsetY = 0;
+            if (windowRatio > videoRatio) {
+                drawHeight = rect.height;
+                drawWidth = rect.height * videoRatio;
+                offsetX = (rect.width - drawWidth) / 2;
+            } else {
+                drawWidth = rect.width;
+                drawHeight = rect.width / videoRatio;
+                offsetY = (rect.height - drawHeight) / 2;
+            }
+
+            const clickX = e.clientX - rect.left - offsetX;
+            const clickY = e.clientY - rect.top - offsetY;
+
+            if (clickX >= 0 && clickX <= drawWidth && clickY >= 0 && clickY <= drawHeight) {
+                socket.emit('mouse_click', { 
+                    x: clickX / drawWidth, 
+                    y: clickY / drawHeight,
+                    button: e.button
+                });
+            }
         };
     </script>
 </body>
@@ -72,9 +137,10 @@ HTML_PAGE = '''
 '''
 
 @app.route('/')
-def index(): return render_template_string(HTML_PAGE)
+def index(): 
+    return render_template_string(HTML_PAGE)
 
-# --- Signaling Relay ---
+# --- Signaling Relay Events ---
 @socketio.on('viewer_joined')
 def handle_join(): emit('viewer_joined', broadcast=True, include_self=False)
 
@@ -87,12 +153,14 @@ def handle_answer(data): emit('answer', data, broadcast=True, include_self=False
 @socketio.on('ice_candidate')
 def handle_ice(data): emit('ice_candidate', data, broadcast=True, include_self=False)
 
-# --- Mouse Relay ---
+# --- Mouse Relay Events ---
 @socketio.on('mouse_move')
 def handle_mouse_move(data): emit('mouse_move', data, broadcast=True, include_self=False)
 
 @socketio.on('mouse_click')
 def handle_mouse_click(data): emit('mouse_click', data, broadcast=True, include_self=False)
 
+
 if __name__ == '__main__':
+    print("Relay Server Running on port 5000...")
     socketio.run(app, host='0.0.0.0', port=5000, allow_unsafe_werkzeug=True)
