@@ -2,7 +2,7 @@ from flask import Flask, render_template_string
 from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
-# ping_timeout और ping_interval को ऑप्टिमाइज़ किया गया है ताकि कनेक्शन ड्रॉप न हो और परफॉरमेंस तेज़ रहे
+# ping_timeout और ping_interval
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', ping_timeout=15, ping_interval=5)
 
 HTML_PAGE = '''
