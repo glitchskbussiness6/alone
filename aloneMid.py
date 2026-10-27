@@ -3,14 +3,14 @@ from flask_socketio import SocketIO, emit
 
 app = Flask(__name__)
 
-# High-performance async socket config with binary payload optimization
+# Ultra-low latency SocketIO Config
 socketio = SocketIO(
     app,
     cors_allowed_origins="*",
     async_mode='threading',
     ping_timeout=30,
     ping_interval=10,
-    max_http_buffer_size=10 * 1024 * 1024  # 10MB limit for high fps burst
+    max_http_buffer_size=10 * 1024 * 1024
 )
 
 HTML_PAGE = '''
@@ -36,9 +36,9 @@ HTML_PAGE = '''
             canvas.height = 720;
         };
 
-        // Hardware accelerated ImageBitmap Rendering pipeline
+        // Hardware-Accelerated ImageBitmap Pipeline
         socket.on('video_frame', function(data) {
-            if (isProcessingFrame) return; // Drop frame on Client side if rendering lag occurs
+            if (isProcessingFrame) return; 
             isProcessingFrame = true;
 
             const blob = new Blob([data.image], { type: "image/jpeg" });
@@ -48,7 +48,7 @@ HTML_PAGE = '''
                     canvas.height = imgBitmap.height;
                 }
                 ctx.drawImage(imgBitmap, 0, 0);
-                imgBitmap.close(); // Free GPU Memory immediately
+                imgBitmap.close();
                 isProcessingFrame = false;
             }).catch(() => { isProcessingFrame = false; });
         });
@@ -64,20 +64,61 @@ HTML_PAGE = '''
             }
         });
 
-        // 1. Precise Mouse Click Event
+        // 1. EXACT ACCURATE CLICK MAPPING (Subtracts Black Letterbox/Pillarbox Bars)
         function sendClick(event) {
             const rect = canvas.getBoundingClientRect();
-            const x = (event.clientX - rect.left) / rect.width;
-            const y = (event.clientY - rect.top) / rect.height;
-            socket.emit('mouse_click', { x: x, y: y, button: event.button });
+            
+            const elementWidth = rect.width;
+            const elementHeight = rect.height;
+
+            const streamWidth = canvas.width;  // Native video width (1280)
+            const streamHeight = canvas.height; // Native video height (720)
+
+            const streamAspect = streamWidth / streamHeight;
+            const elementAspect = elementWidth / elementHeight;
+
+            let renderWidth, renderHeight;
+            let offsetX = 0;
+            let offsetY = 0;
+
+            // Display area calculation
+            if (elementAspect > streamAspect) {
+                // Pillarbox (Black bars on left/right)
+                renderHeight = elementHeight;
+                renderWidth = elementHeight * streamAspect;
+                offsetX = (elementWidth - renderWidth) / 2;
+            } else {
+                // Letterbox (Black bars on top/bottom)
+                renderWidth = elementWidth;
+                renderHeight = elementWidth / streamAspect;
+                offsetY = (elementHeight - renderHeight) / 2;
+            }
+
+            // Calculate precise coordinates inside actual frame area
+            const clickX = event.clientX - rect.left - offsetX;
+            const clickY = event.clientY - rect.top - offsetY;
+
+            // Ignore clicks made on black bars
+            if (clickX < 0 || clickX > renderWidth || clickY < 0 || clickY > renderHeight) {
+                return;
+            }
+
+            // Normalized 0.0 - 1.0 coordinates
+            const normalizedX = clickX / renderWidth;
+            const normalizedY = clickY / renderHeight;
+
+            socket.emit('mouse_click', {
+                x: normalizedX,
+                y: normalizedY,
+                button: event.button
+            });
         }
 
-        // 2. Optimized Wheel Scroll (Accurate Smooth Delta Mapping)
+        // 2. Smooth Mouse Scroll Handler
         let scrollTimeout;
         window.addEventListener('wheel', function(event) {
             event.preventDefault();
             
-            // Throttle scroll events to 30ms to prevent network flooding
             if (!scrollTimeout) {
                 scrollTimeout = setTimeout(() => {
                     scrollTimeout = null;
@@ -133,5 +174,5 @@ def handle_keyboard(data):
     emit('execute_keyboard', data, broadcast=True, include_self=False)
 
 if __name__ == '__main__':
-    print("Relay High-Perf Engine running on port 5000...")
+    print("Relay Engine (Optimized) listening on port 5000...")
     socketio.run(app, host='0.0.0.0', port=5000, debug=False, allow_unsafe_werkzeug=True)
