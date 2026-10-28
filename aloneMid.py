@@ -17,9 +17,13 @@ HTML_PAGE = '''
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0"/>
     <style>
         html, body { margin: 0; height: 100%; background: black; overflow: hidden; }
-        video {
+        video, #fb-img {
             width: 100vw; height: 100vh; object-fit: contain;
             cursor: crosshair; touch-action: none;
+        }
+        #fb-img {
+            display: none; position: fixed; top: 0; left: 0; z-index: 1;
+            background: black; user-select: none; -webkit-user-drag: none;
         }
         #remote-cursor {
             position: fixed; top: 0; left: 0; width: 22px; height: 22px; z-index: 100;
@@ -64,6 +68,7 @@ HTML_PAGE = '''
     </svg>
 
     <video id="video-stream" autoplay playsinline webkit-playsinline muted></video>
+    <img id="fb-img" alt="" draggable="false">
 
     <script>
         // ====== TURN CONFIG ======
@@ -93,6 +98,54 @@ HTML_PAGE = '''
         let pc = null;
         let pendingCandidates = [];
 
+        // ====== RELAY FALLBACK ======
+        // WebRTC (ICE) 6 second mein connect na ho ya fail ho jaye to screen frames
+        // Render relay server ke through aate hain (TURN ki zarurat nahi).
+        // URL ke end mein ?mode=relay lagao to seedha relay mode chalega.
+        const FALLBACK_AFTER_MS = 6000;
+        const forceRelay = new URLSearchParams(location.search).get('mode') === 'relay';
+        const fbImg = document.getElementById('fb-img');
+        let useFallback = false;
+        let fbFrames = 0;
+        let fbUrl = null;
+        let connWatch = null;
+
+        fbImg.onload = () => { fbFrames++; };
+
+        function startFallback() {
+            if (useFallback) return;
+            useFallback = true;
+            fbFrames = 0;
+            fbImg.style.display = 'block';
+            video.style.visibility = 'hidden';
+            statusEl.style.display = 'block';
+            setStatus('Relay mode (WebRTC connect nahi hua)');
+            socket.emit('fallback_start');
+        }
+
+        function resetFallbackUI() {
+            useFallback = false;
+            fbImg.style.display = 'none';
+            video.style.visibility = 'visible';
+            if (fbUrl) { URL.revokeObjectURL(fbUrl); fbUrl = null; }
+        }
+
+        function stopFallback() {
+            if (!useFallback) return;
+            resetFallbackUI();
+            socket.emit('fallback_stop');
+        }
+
+        socket.on('frame', (data) => {
+            if (!useFallback) return;
+            const url = URL.createObjectURL(new Blob([data], { type: 'image/jpeg' }));
+            fbImg.src = url;
+            if (fbUrl) URL.revokeObjectURL(fbUrl);
+            fbUrl = url;
+            socket.emit('frame_ack');
+        });
+        // ============================
+
         function setStatus(t) { statusEl.textContent = t; console.log(t); }
 
         // Debug: har second video ki asli halat dikhao (yellow text)
@@ -110,6 +163,7 @@ HTML_PAGE = '''
                 } catch (e) {}
             }
             txt += ' | video=' + video.videoWidth + 'x' + video.videoHeight + ' paused=' + video.paused;
+            txt += ' | mode=' + (useFallback ? 'RELAY frames=' + fbFrames : 'webrtc');
             dbgEl.textContent = txt;
         }, 1000);
 
@@ -145,9 +199,11 @@ HTML_PAGE = '''
             pc.onconnectionstatechange = () => {
                 setStatus('PC: ' + pc.connectionState);
                 if (pc.connectionState === 'connected') {
-                    setTimeout(() => { statusEl.style.display = 'none'; }, 2000);
+                    if (!forceRelay) stopFallback();
+                    setTimeout(() => { if (!useFallback) statusEl.style.display = 'none'; }, 2000);
                 } else {
                     statusEl.style.display = 'block';
+                    if (pc.connectionState === 'failed') startFallback();
                 }
             };
         }
@@ -163,6 +219,14 @@ HTML_PAGE = '''
         socket.on('offer', async (offer) => {
             try {
                 createPC();
+                clearTimeout(connWatch);
+                if (forceRelay) {
+                    startFallback();
+                } else {
+                    connWatch = setTimeout(() => {
+                        if (!pc || pc.connectionState !== 'connected') startFallback();
+                    }, FALLBACK_AFTER_MS);
+                }
                 await pc.setRemoteDescription(new RTCSessionDescription(offer));
                 await drainCandidates();
                 const answer = await pc.createAnswer();
@@ -186,15 +250,18 @@ HTML_PAGE = '''
 
         // Socket connect / reconnect hone par host ko batao
         socket.on('connect', () => {
+            clearTimeout(connWatch);
+            resetFallbackUI();
             setStatus('Connected to relay, waiting for host...');
             socket.emit('viewer_joined');
         });
 
         // --- 2. Remote cursor ---
         function getDrawRect() {
-            const rect = video.getBoundingClientRect();
-            const vw = video.videoWidth || 1280;
-            const vh = video.videoHeight || 720;
+            const el = useFallback ? fbImg : video;
+            const rect = el.getBoundingClientRect();
+            const vw = (useFallback ? fbImg.naturalWidth : video.videoWidth) || 1280;
+            const vh = (useFallback ? fbImg.naturalHeight : video.videoHeight) || 720;
             const videoRatio = vw / vh;
             const windowRatio = rect.width / rect.height;
 
@@ -282,8 +349,9 @@ HTML_PAGE = '''
 
         // --- 3. Click / Tap sender (pointer events = mouse + touch dono) ---
         video.oncontextmenu = (e) => e.preventDefault();
+        fbImg.oncontextmenu = (e) => e.preventDefault();
 
-        video.onpointerdown = (e) => {
+        function onPointerDown(e) {
             e.preventDefault();
             const { rect, drawWidth, drawHeight, offsetX, offsetY } = getDrawRect();
             const clickX = e.clientX - rect.left - offsetX;
@@ -296,7 +364,9 @@ HTML_PAGE = '''
                     button: e.button
                 });
             }
-        };
+        }
+        video.onpointerdown = onPointerDown;
+        fbImg.onpointerdown = onPointerDown;
     </script>
 </body>
 </html>
@@ -310,12 +380,18 @@ def index():
 
 def to_viewer(event, data=None):
     if viewer_sid:
-        emit(event, data, to=viewer_sid)
+        if data is None:
+            emit(event, to=viewer_sid)
+        else:
+            emit(event, data, to=viewer_sid)
 
 
 def to_host(event, data=None):
     if host_sid:
-        emit(event, data, to=host_sid)
+        if data is None:
+            emit(event, to=host_sid)
+        else:
+            emit(event, data, to=host_sid)
 
 
 @socketio.on('disconnect')
@@ -345,6 +421,32 @@ def handle_answer(data):
 def handle_mouse_click(data):
     if request.sid == viewer_sid:
         to_host('mouse_click', data)
+
+
+# --- Relay fallback (TURN ke bina video) ---
+@socketio.on('fallback_start')
+def handle_fallback_start():
+    if request.sid == viewer_sid:
+        to_host('fallback_start')
+
+
+@socketio.on('fallback_stop')
+def handle_fallback_stop():
+    if request.sid == viewer_sid:
+        to_host('fallback_stop')
+
+
+@socketio.on('frame_ack')
+def handle_frame_ack():
+    if request.sid == viewer_sid:
+        to_host('frame_ack')
+
+
+@socketio.on('frame')
+def handle_frame(data):
+    global host_sid
+    host_sid = request.sid
+    to_viewer('frame', data)
 
 
 # --- Host -> Viewer ---
