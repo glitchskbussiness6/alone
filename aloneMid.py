@@ -45,11 +45,17 @@ HTML_PAGE = '''
             color: #0f0; font: 12px monospace; background: rgba(0,0,0,0.6);
             padding: 3px 6px; border-radius: 4px; pointer-events: none;
         }
+        #dbg {
+            position: fixed; top: 30px; left: 6px; z-index: 200;
+            color: #ff0; font: 12px monospace; background: rgba(0,0,0,0.6);
+            padding: 3px 6px; border-radius: 4px; pointer-events: none;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body>
     <div id="status">starting...</div>
+    <div id="dbg">debug...</div>
     <button id="fs-btn">⛶ Full Screen (Landscape)</button>
     <div id="toast"></div>
 
@@ -82,11 +88,30 @@ HTML_PAGE = '''
         const video = document.getElementById('video-stream');
         const cursor = document.getElementById('remote-cursor');
         const statusEl = document.getElementById('status');
+        const dbgEl = document.getElementById('dbg');
 
         let pc = null;
         let pendingCandidates = [];
 
         function setStatus(t) { statusEl.textContent = t; console.log(t); }
+
+        // Debug: har second video ki asli halat dikhao (yellow text)
+        setInterval(async () => {
+            let txt = 'no pc';
+            if (pc) {
+                txt = 'ice=' + pc.iceConnectionState + ' pc=' + pc.connectionState;
+                try {
+                    const stats = await pc.getStats();
+                    stats.forEach((r) => {
+                        if (r.type === 'inbound-rtp' && r.kind === 'video') {
+                            txt += ' | rx=' + (r.bytesReceived || 0) + 'B decoded=' + (r.framesDecoded || 0);
+                        }
+                    });
+                } catch (e) {}
+            }
+            txt += ' | video=' + video.videoWidth + 'x' + video.videoHeight + ' paused=' + video.paused;
+            dbgEl.textContent = txt;
+        }, 1000);
 
         function createPC() {
             if (pc) { try { pc.close(); } catch (e) {} }
@@ -94,6 +119,7 @@ HTML_PAGE = '''
             pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
             pc.ontrack = (event) => {
+                setStatus('Track received');
                 video.srcObject = event.streams[0];
                 const tryPlay = () => {
                     video.play().catch(() => {
