@@ -38,13 +38,6 @@ HTML_PAGE = '''
             opacity: 0.8; touch-action: manipulation;
         }
         #fs-btn:active { opacity: 1; }
-        #kb-btn {
-            position: fixed; top: 52px; right: 8px; z-index: 300;
-            background: rgba(30,30,30,0.75); color: #fff; border: 1px solid #888;
-            border-radius: 8px; padding: 8px 12px; font: 14px sans-serif;
-            opacity: 0.8; touch-action: manipulation;
-        }
-        #kb-btn.on { background: rgba(0,120,0,0.85); opacity: 1; }
         #kb-input {
             position: fixed; bottom: 0; left: 0; width: 1px; height: 1px;
             opacity: 0; border: 0; padding: 0; font-size: 16px; /* 16px: iOS zoom roakta hai */
@@ -72,7 +65,6 @@ HTML_PAGE = '''
     <div id="status">starting...</div>
     <div id="dbg">debug...</div>
     <button id="fs-btn">⛶ Full Screen (Landscape)</button>
-    <button id="kb-btn">⌨ Keyboard</button>
     <textarea id="kb-input" autocapitalize="off" autocomplete="off"
               autocorrect="off" spellcheck="false"></textarea>
     <div id="toast"></div>
@@ -378,33 +370,19 @@ HTML_PAGE = '''
                     button: e.button
                 });
             }
-            // Keyboard mode ON ho to hidden input par focus wapas laao
-            if (kbActive) setTimeout(() => kbInput.focus(), 0);
+            // Keyboard hamesha ON: hidden input par focus rakho
+            setTimeout(() => kbInput.focus(), 0);
         }
         video.onpointerdown = onPointerDown;
         fbImg.onpointerdown = onPointerDown;
 
-        // --- 4. Keyboard sender (desktop keyboard + phone on-screen keyboard) ---
-        const kbBtn = document.getElementById('kb-btn');
+        // --- 4. Keyboard sender (hamesha ON, koi toggle button nahi) ---
         const kbInput = document.getElementById('kb-input');
-        let kbActive = false;
-
-        function setKeyboard(on) {
-            kbActive = on;
-            kbBtn.classList.toggle('on', on);
-            kbBtn.textContent = on ? '⌨ Keyboard ON' : '⌨ Keyboard';
-            if (on) {
-                kbInput.focus();
-                toast('Pehle remote screen par text field click karo, phir type karo');
-            } else {
-                kbInput.blur();
-            }
-        }
-        kbBtn.onclick = () => setKeyboard(!kbActive);
+        kbInput.focus();
 
         // Special keys aur shortcuts (Enter, arrows, Ctrl+C, F-keys...)
         document.addEventListener('keydown', (e) => {
-            if (!kbActive || e.isComposing) return;
+            if (e.isComposing) return;
             if (e.key === 'Unidentified' || e.key === 'Process') return;
             if (['Shift', 'Control', 'Alt', 'Meta', 'Dead'].includes(e.key)) return;
 
@@ -565,7 +543,6 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print(f"Relay Server Running on port {port}...")
     socketio.run(app, host='0.0.0.0', port=port, allow_unsafe_werkzeug=True)
-
 
 
 
