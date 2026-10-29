@@ -9,6 +9,7 @@ socketio = SocketIO(
     ping_interval=20,
     ping_timeout=60,
     max_http_buffer_size=20 * 1024 * 1024,
+    http_compression=False,  # JPEG already compressed, dobara compress karna CPU waste
 )
 
 viewer_sid = None
@@ -82,6 +83,7 @@ HTML_PAGE = '''
         const loaderEl = document.getElementById('loader');
         const loaderTextEl = document.getElementById('loader-text');
         let currentUrl = null;
+        let seq = 0, shown = 0;
 
         socket.on('connect', () => {
             loaderTextEl.textContent = 'Connected. Waiting for host...';
@@ -99,12 +101,23 @@ HTML_PAGE = '''
 
         socket.on('frame', (data) => {
             loaderEl.style.display = 'none';
+            // Decode off-thread, newest frame wins, ack tab bhejo jab frame sach me decode ho jaye
+            // (isse slow phone/network par host khud slow ho jata hai, lag build nahi hota)
+            const my = ++seq;
             const url = URL.createObjectURL(new Blob([data], { type: 'image/jpeg' }));
-            const old = currentUrl;
-            currentUrl = url;
-            img.onload = () => { if (old) URL.revokeObjectURL(old); };
-            img.src = url;
-            socket.emit('frame_ack');
+            const tmp = new Image();
+            tmp.src = url;
+            tmp.decode().then(() => {
+                if (my > shown) {
+                    shown = my;
+                    img.src = url;
+                    if (currentUrl) URL.revokeObjectURL(currentUrl);
+                    currentUrl = url;
+                } else {
+                    URL.revokeObjectURL(url);
+                }
+            }).catch(() => URL.revokeObjectURL(url))
+              .finally(() => socket.emit('frame_ack'));
         });
 
         function getDrawRect() {
@@ -217,7 +230,7 @@ def handle_join():
     viewer_sid = request.sid
     emit('host_status', {'alive': host_sid is not None})
     if host_sid:
-        socketio.emit('frame_ack', to=host_sid)
+        socketio.emit('request_frame', to=host_sid)
 
 @socketio.on('frame')
 def handle_frame(data):
